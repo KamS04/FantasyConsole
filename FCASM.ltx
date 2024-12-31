@@ -1,0 +1,1132 @@
+\documentclass{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{mathtools}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\usepackage{titlesec}
+\usepackage{multicol}
+\usepackage{hyperref}
+\usepackage[table]{xcolor}
+\usepackage{colortbl}
+\usepackage{arydshln}
+\usepackage{tcolorbox}
+\usepackage{makecell}
+\usepackage{ifthen}
+\usepackage{array}
+\usepackage{vwcol}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+}
+
+\title{Fantasy-Console Assembly Syntax and ISA Reference}
+\author{KamS04}
+\date{July 20$^{th}$, 2024}
+
+
+\begin{document}
+
+\maketitle
+
+\break
+
+\section{TODO Notes:}
+
+\begin{itemize}
+    \item This is not implemented yet but the usage of the \textbf{CLINE} keyword
+            must be changed. Currently \textbf{CLINE} returns the adderss of the
+            current instruction being encoded. This is useful!! but it really isn't.
+            Because whoever is writing FCASM, must manually calucate how many bytes
+            to offset because CLINE returns a byte address. This should change, instead
+            CLINE should return the line index of the line being encoded.
+    \item Line indexes are a concept that must be properly implemented into the assembler
+            (Scaffolding exists already with the nlineidxes) but this must be pushed further,
+            Line indexes should start at 0 and the counter should be incremented at every encoded
+            element, i.e. a constant element should not increment the line index, but a data
+            element should.
+    \item A macro needs to be introduced called something of the sorts of ADDROF(x), where x
+            is a line index, and the result of this macro is the encoded address of that line.
+    \item Fixup how memory operands are written, I think it's weird in some places
+    \item Introduce a system to specify the size of a data block rather than defining the
+            data
+\end{itemize}
+
+\tableofcontents
+
+\pagebreak
+
+%region Assembler Structures
+
+\section{Syntax}
+
+Each line in the assembly is one of a few different kinds of statements.
+
+\subsection{Instruction}
+
+An instruction starts with an instruction tag (found in \hyperref[sec:instructions]{Instructions}), and then the right number
+and type of arguments. The type and number of arguments are determined by the
+instruction format (found in \hyperref[sec:instructionformats]{Instruction Formats}).
+
+\subsection{Data Element}
+
+\begin{itemize}
+    \item data8 \textbf{identifier} = \{ \textit{\%comma\_separated\_hex\_literals\%} \}
+    \item data16 \textbf{identifier} = \{ \textit{\%comma\_separated\_hex\_literals\%} \}
+\end{itemize}
+
+A data element specifies a data block within the final assembly that can also be
+referenced by the rest of the assembly file. The size modifier after the data keyword
+specifies the size of each element in the data block. Each literal provided in
+the body of a data element increases the size of the data block by the given size
+modifier. The size modifier is either \textit{8 Bits} or \textit{16 Bits} (1 or 2 bytes).
+Total size of a data block is not specified (probably should be) but rather is
+calculated by multiplying the size modifier by the number of hex literals. Note the
+data block MUST be initialized to the values in the data declaration.
+
+\subsection{Constant Element}
+
+\begin{itemize}
+    \item constant \textbf{identifier} = \textit{\$hex\_literal}
+\end{itemize}
+
+This defines a compile time constant. The constant can be referenced by
+the assembly file (and exported to other linked assembly files). Note that
+these constants cannot be edited after declaration AND these constants do not
+exist at runtime.
+
+\subsection{Structure Element}
+
+\begin{itemize}
+    \item structure \textbf{identifier} \{ \textit{\%comma\_separated\_member\_declarations\%} \}
+    \item member\_declaration of form: ``\textbf{identifier}: \textit{\$size\_in\_bytes\_as\_hex\_literal}''
+\end{itemize}
+
+The structure element creates a compiletime entity that contains offsets, that
+can be used to group a memory block into an object and then access the individual members
+of said object, using the .operator.
+
+\subsection{Argument Struture Element}
+
+\begin{itemize}
+    \item structure \textbf{identifier} \{ \textit{\%comma\_separated\_member\_declarations\%} \}
+\end{itemize}
+
+The Arguments structure is equivalent to a regular structure element, BUT the offsets
+are offsetted by the stack frame size. For subroutines using the hardware calling mechanism,
+and the stack arguments system can use this construct to skip over the stack frame and
+access the arguments for this subroutine directly.
+
+\subsection{Label}
+
+\begin{itemize}
+    \item \textbf{identifier}:
+\end{itemize}
+
+This is equivalent to a compile time constant except this value is set to the
+current memory address being encoded.
+
+%endregion
+
+%region Argument Syntax
+
+\section{More Syntax}
+
+Registers are indexed by their names.
+
+\begin{multicols}{4}
+
+\begin{itemize}
+    \item ip
+    \item acu
+    \item r1
+    \item r2
+    \item r3
+    \item r4
+    \item r5
+    \item r6
+    \item r7
+    \item r8
+    \item fp
+    \item sp
+\end{itemize}
+
+\end{multicols}
+
+\subsection{Literal}
+
+\begin{itemize}
+    \item \label{sec:hexliteral} Hex literal is represented with a \textbf{`\$'} followed by 1-4 hex digits
+    \item Literal form variable can also be acquired using a SQUARE\_BRACKET\_EXPRESSION
+    \begin{itemize}
+        \item For a literal no prefix is required for the expression
+    \end{itemize}
+\end{itemize}
+
+\subsection{Memory / Address}
+
+\begin{itemize}
+    \item Memory/Address is represented with a \textbf{`\&'} followed by a 1-4 hex digit
+    \item Memory/Address can also be acquired using SQUARE\_BRACKET\_EXPRESSION
+    \item prefix \textbf{`\&'} required for memory/address
+\end{itemize}
+
+\subsection{Register Pointer}
+
+\begin{itemize}
+    \item Register pointer is equivalent to accessing a memory/address from register
+    \item Hence, it is a \textbf{`\&'} followed by a register name
+\end{itemize}
+
+\subsection{SQUARE\_BRACKET\_EXPRESSION}
+
+A square bracket starts and terminates with a square bracket. A square bracket supports
+the following operators
+
+\begin{multicols}{4}
+    \begin{itemize}
+        \item +
+    \end{itemize}
+    \begin{itemize}
+        \item -
+    \end{itemize}
+    \begin{itemize}
+        \item *
+    \end{itemize}
+    \begin{itemize}
+        \item /
+    \end{itemize}
+\end{multicols}
+
+\textit{Note:} division implementation is not the most robust, use sparingly with lots of tests. \\
+\\
+A square bracket \textbf{MUST} have at least one argument/value. The use of operators is optional.
+\textbf{ANY} operator used \textbf{MUST} have an argument on either side.
+
+\subsection{SQUARE\_BRACKET\_EXPRESSION Argument/Value Syntax}
+
+\subsubsection{Hex Literal} \label{sec:ahexliteral}
+
+This is the exact same as a regular \hyperref[sec:hexliteral]{hex literal}
+
+\subsubsection{Variable} \label{sec:variable}
+
+\begin{itemize}
+    \item \textbf{``!identifier''}
+\end{itemize}
+
+A variable is written as an exclamation mark followed by a variable name.
+
+\subsubsection{Interpret As Single} \label{sec:interpretassingle}
+
+\begin{itemize}
+    \item \textbf{\textless\textit{\%Structure\%}\textgreater}\textit{\%symbol\%}\textbf{.}\textit{\%property\%}
+\end{itemize}
+
+The interpret as single command tells the assembler expression evaluator to assume
+that symbol is a pointer/memory address to a memory block of type \textbf{Structure}.
+The evaluator then calculates and returns the corresponding address of the \textbf{property}
+within the structure. The \textbf{symbol} can be a \hyperref[sec:variable]{variable} or
+a \hyperref[sec:ahexliteral]{hex literal} using their corresponding syntaxes.
+
+\subsubsection{Interpret As Array}
+
+\begin{itemize}
+    \item \textbf{\textless\textit{\%Structure\%}\textgreater}\textit{\%symbol\%}\textbf{[\textit{\%index\%}]}\textbf{.}\textit{\%property\%}
+\end{itemize}
+
+This is similar to \hyperref[sec:interpretassingle]{interpret as single}. This assumes that
+\textbf{symbol} is a pointer to an array of \textbf{Structure} elements. The evaluator calculates
+the address of the \textbf{index}-th item of this array (found by multiplying the total size of
+the \textbf{Structure} by \textbf{index} and adding to the value of \textbf{symbol}). The
+evaluator then finds the offset of the \textbf{property} within this data block and this final
+address is returned.
+
+%endregion
+
+%region Instruction Formats
+
+\section{Instruction Formats} \label{sec:instructionformats}
+
+A collection of instruction types are available to the assembler.
+These types determine the number and types (sizes) of arguments for
+each instruction.
+
+\newcommand{\iformat}[2]{%
+    \item \textbf{#1} \label{sec:#1}
+    \begin{itemize}
+        \item #2
+    \end{itemize}
+}
+
+\begin{multicols}{2}
+
+\begin{itemize}
+    \iformat{noArgs}{No arguments passed to this format}
+    \iformat{singleReg}{1 Register index passed to this format}
+    \iformat{singleMem}{1 memory address passed to this format}
+    \iformat{singleLit}{1 literal value passed to this format}
+    \iformat{singleLit8}{8-bit literal value passed to this format}
+    \iformat{lit8Mem}{8-bit literal and memory address}
+    \iformat{litMem}{16-bit literal and memory address}
+    \iformat{litOffReg}{16-bit literal, register pointer, and register}
+    \iformat{memReg}{Memory address followed by register}
+    \iformat{regMem}{Register followed by Memory address}
+    \iformat{litReg}{Literal followed by Register}
+    \iformat{regPtr}{1 Register index passed, Value in register is read as Memory address}
+    \iformat{regReg}{Register followed by another register}
+    \iformat{regLit}{Register followed by literal}
+    \iformat{regLit8}{Register followed by 8-bit literal}
+    \iformat{regPtrReg}{Register pointer followed by register}
+    \iformat{regRegPtr}{Register followed by a register pointer}
+    \iformat{regRegReg}{Register, register, and then a register}
+\end{itemize}
+
+\end{multicols}
+
+%endregion
+
+%region Instructions List
+
+\section{Instructions} \label{sec:instructions}
+
+\newcommand{\itm}[1]{%
+\begin{itemize}%
+    #1%
+\end{itemize}%
+}
+\newcommand{\ins}[3]{%
+    \subsubsection{#1 - \hyperref[sec:#2]{\textit{#2}}}%
+    \label{sec:#1}%
+    \itm{#3}%
+}
+\newcommand{\isec}[1]{%
+    \subsection{#1}%
+    \label{sec:#1}
+}
+
+\begin{multicols}{2}
+
+\isec{log}
+
+\ins{LOG REG}{singleReg}{
+    \item 0x20
+    \item prints value of \textbf{register} to debugging output (STDOUT on most VMs)
+}
+
+\ins{LOG REG PTR}{regPtr}{
+    \item 0x21
+    \item prints value of memory at address in \textbf{register} to debugging output
+}
+
+\ins{LOG MEM}{singleMem}{
+    \item 0x41
+    \item prints value of memory at \textbf{address} to debugging output
+}
+
+\isec{mov8}
+
+\ins{MOV8 LIT MEM}{lit8Mem}{
+    \item 0xD9
+    \item move 1 byte \textbf{literal} to \textbf{address}
+}
+
+\ins{MOV8 MEM REG}{memReg}{
+    \item 0x9b
+    \item move 1 byte from \textbf{address} to \textbf{register}
+}
+
+\ins{MOV8 REG PTR REG}{regPtrReg}{
+    \item 0xBF
+    \item copy byte at address in \textbf{register 1} to \textbf{register 2}
+}
+
+\end{multicols}
+
+\begin{multicols}{2}
+
+\ins{MOV8 REG REG PTR}{regRegPtr}{
+    \item 0xBB
+    \item copy low byte in \textbf{register 1} to address in \textbf{register 2}
+}
+
+\isec{movl}
+
+\ins{MOVL REG MEM}{regMem}{
+    \item 0x79
+    \item copy low byte in \textbf{register} to \textbf{memory}
+}
+
+\isec{movh}
+
+\ins{MOVH REG MEM}{regMem}{
+    \item 0x7D
+    \item copy high byte in \textbf{register} to \textbf{memory}
+}
+
+\isec{mov}
+
+\ins{MOV LIT REG}{litReg}{
+    \item 0x98
+    \item move \textbf{literal} to \textbf{register}
+}
+
+\ins{MOV REG REG}{regReg}{
+    \item 0xB8
+    \item copy value in \textbf{register 1} to \textbf{register 2}
+}
+
+\ins{MOV REG REG PTR}{regRegPtr}{
+    \item 0xBA
+    \item copy literal in \textbf{register 1} to address in \textbf{register 2}
+}
+
+\ins{MOV REG MEM}{regMem}{
+    \item 0x78
+    \item copy literal in \textbf{register} to \textbf{address}
+}
+
+\ins{MOV MEM REG}{memReg}{
+    \item 0x9A
+    \item copy memory at \textbf{address} to \textbf{register}
+}
+
+\ins{MOV LIT MEM}{litMem}{
+    \item 0xD8
+    \item move \textbf{literal} to \textbf{address}
+}
+
+\ins{MOV REG PTR REG}{regPtrReg}{
+    \item 0xBE
+    \item copy value at address in \textbf{register 1} to \textbf{register 2}
+}
+
+\ins{MOV LIT OFF REG}{litOffReg}{
+    \item 0xF8
+    \item copy value at address, calculated by adding \textbf{literal} offset
+            to address in \textbf{register 1}, to \textbf{register 2}
+}
+
+\isec{movb}
+
+\ins{MOV BLOCK}{regRegReg}{
+    \item 0x7E
+    \item copy memory blck at address in \textbf{register 1}, to memory block at address in \textbf{register 2}, of length in \textbf{register 3}
+    \item all of these are RAV addresses
+}
+
+\isec{int}
+
+\ins{INT LIT}{singleLit}{
+    \item 0x45
+    \item interrupt with literal
+    \itm{
+        \item stack frame is not saved to stack
+        \item only thing saved to stack is the next\_instruction\_address
+        \item similar to \hyperref{sec:jmp} rather than \hyperref[sec:cal]{cal}
+    }
+}
+
+\ins{INT REG}{singleReg}{
+    \item 0x25
+    \item interrupt with value in \textbf{register}
+    \itm{
+        \item stack frame is not saved to stack
+        \item only thing saved to stack is the next\_instruction\_address
+        \item similar to \hyperref[sec:jmp]{jmp} rather than \hyperref[sec:cal]{cal}
+    }
+}
+
+\isec{rti}
+
+\ins{RET INT}{noArgs}{
+    \item 0x05
+    \item return from interrupt
+    \itm{
+        \item pops off next\_instruction\_address and jump to it
+        \item no stack frame to remove
+    }
+}
+
+\isec{add}
+
+\ins{ADD REG REG}{regReg}{
+    \item 0xB0
+    \item add value in \textbf{register 1} with value in \textbf{register 2}, save in acu
+}
+
+\ins{ADD LIT REG}{litReg}{
+    \item 0x90
+    \item add \textbf{literal} with value in \textbf{register}, save in acu
+}
+
+\isec{sub}
+
+\ins{SUB LIT REG}{litReg}{
+    \item 0x91
+    \item subtracts value in \textbf{register} from \textbf{literal}, save in acu
+}
+
+\ins{SUB REG LIT}{regLit}{
+    \item 0x71
+    \item subtract \textbf{literal} from value in \textbf{register}, save in acu
+}
+
+\ins{SUB REG REG}{regReg}{
+    \item 0xB1
+    \item subtract value in \textbf{register 2} from value in \textbf{register 1}, save in acu
+}
+
+\isec{inc}
+
+\ins{INC REG}{singleReg}{
+    \item 0x30
+    \item increment the value in the \textbf{register} by 1 (in place)
+}
+
+\isec{dec}
+
+\ins{DEC REG}{singleReg}{
+    \item 0x31
+    \item decrement the value in the \textbf{register} by 1 (in place)
+}
+
+\isec{mul}
+
+\ins{MUL LIT REG}{litReg}{
+    \item 0x96
+    \item multiply a \textbf{literal} by a value in \textbf{register}, save in acu
+}
+
+\ins{MUL REG REG}{regReg}{
+    \item 0xB6
+    \item multiply value in \textbf{register 1} by value in \textbf{register 2}, save in acu
+}
+
+\isec{lsf}
+
+\ins{LSF REG LIT}{regLit8}{
+    \item 0x74
+    \item shift value in \textbf{register} by \textbf{literal} bits to left, save in acu
+}
+
+\ins{LSF REG REG}{regReg}{
+    \item 0xB4
+    \item shift value in \textbf{register 1} by value in \textbf{register 2} bits to left, save in acu
+}
+
+\isec{rsf}
+
+\ins{RSF REG LIT}{regLit8}{
+    \item 0x75
+    \item shift value in \textbf{register} by \textbf{literal} bits to right, save in acu
+}
+
+\ins{RSF REG REG}{regReg}{
+    \item 0xB5
+    \item shift value in \textbf{register 1} by value in \textbf{register 2}, save in acu
+}
+
+\isec{and}
+
+\ins{AND REG LIT}{regLit}{
+    \item 0x77
+    \item perform bitwise \textit{and} between value in \textbf{register} and \textbf{literal}, save in acu
+}
+
+\ins{AND REG REG}{regReg}{
+    \item 0xB7
+    \item perform bitwise \textit{and} between value in \textbf{register 1} and value in \textbf{register 2}, save in acu
+}
+
+\isec{or}
+
+\ins{OR REG LIT}{regLit}{
+    \item 0x72
+    \item perform bitwise \textit{or} between value in \textbf{register} and \textbf{literal}, save in acu
+}
+
+\ins{OR REG REG}{regReg}{
+    \item 0xB2
+    \item perform bitwise \textit{or} between value in \textbf{register 1} and value in \textbf{register 2}, save in acu
+}
+
+\isec{xor}
+
+\ins{XOR REG LIT}{regLit}{
+    \item 0x73
+    \item perform bitwise \textit{xor} between value in \textbf{register} and \textbf{literal}, save in acu
+}
+
+\ins{XOR REG REG}{regReg}{
+    \item 0xB3
+    \item perform bitwise \textit{xor} between value in \textbf{register 1} and value in \textbf{register 2}, save in acu
+}
+
+\isec{not}
+
+\ins{NOT}{singleReg}{
+    \item 0x37
+    \item perform bitwise \textit{not} on value in \textbf{register}, save in acu
+}
+
+\isec{jmp}
+
+\ins{JMP REG}{singleReg}{
+    \item 0x28
+    \item Jump to address inside register
+}
+
+\ins{JMP LIT}{singleMem}{
+    \item 0x48
+    \item Jump to address
+}
+
+\isec{jne}
+
+\ins{JNE LIT}{litMem}{
+    \item 0xCD
+    \item if \textbf{literal} is not equal to value in acu, jump to \textbf{address}
+}
+
+\ins{JNE REG}{regMem}{
+    \item 0x6D
+    \item if value in \textbf{register} is not equal to value in acu, jump to \textbf{address}
+}
+
+\isec{jeq}
+
+\ins{JEQ REG}{regMem}{
+    \item 0x6A
+    \item if value in \textbf{register} is equal to value in acu, jump to \textbf{address}
+}
+
+\ins{JEQ LIT}{litMem}{
+    \item 0xCA
+    \item if \textbf{literal} is equal to value in acu, jump to \textbf{address}
+}
+
+\isec{jlt}
+
+\ins{JLT REG}{regMem}{
+    \item 0x6C
+    \item if value in \textbf{register} is less than value in acu, jump to \textbf{address}
+}
+
+\ins{JLT LIT}{litMem}{
+    \item 0xCC
+    \item if \textbf{literal} is less than value in acu, jump to \textbf{address}
+}
+
+\isec{jgt}
+
+\ins{JGT REG}{regMem}{
+    \item 0x69
+    \item if value in \textbf{register} is greater than value in acu, jump to \textbf{address}
+}
+
+\ins{JGT LIT}{litMem}{
+    \item 0xC9
+    \item if value in \textbf{register} is greater than value in acu, jump to \textbf{address}
+}
+
+\isec{jle}
+
+\ins{JLE REG}{regMem}{
+    \item 0x6E
+    \item if value in \textbf{register} is less than equal to value in acu, jump to \textbf{address}
+}
+
+\ins{JLE LIT}{litMem}{
+    \item 0xCE
+    \item if \textbf{literal} is less than equal to value in acu, jump to \textbf{address}
+}
+
+\isec{jge}
+
+\ins{JGE REG}{regMem}{
+    \item 0x6B
+    \item if value in \textbf{register} is greater than equal to value in acu, jump to \textbf{address}
+}
+
+\ins{JGE LIT}{litMem}{
+    \item 0xCB
+    \item if \textbf{literal} is greater than equal to value in acu, jump to \textbf{address}
+}
+
+\isec{psh}
+
+\ins{PSH LIT}{singleLit}{
+    \item 0x42
+    \item push \textbf{literal} to stack (will add 2 to the \textit{sp} register)
+}
+
+\ins{PSH REG}{singleReg}{
+    \item 0x22
+    \item push value in \textbf{register} to stack (will add 2 to the \textit{sp} register)
+}
+
+\end{multicols}
+
+\begin{multicols}{2}
+
+\isec{pop}
+
+\ins{POP}{singleReg}{
+    \item 0x23
+    \item pop value off stack and save in \textbf{register} (will subtract 2 from the \textit{sp} register)
+}
+
+\isec{cal}
+
+\ins{CAL LIT}{singleLit}{
+    \item 0x44
+    \item call subroutine at \textbf{address}
+    \itm{
+        \item saves stack frame to stack
+        \item assume that registers will stay intact on return of subroutine
+        \itm{
+            \item except for acu, which will contain the result of the subroutine
+        }
+    }
+}
+
+\ins{CAL REG}{singleReg}{
+    \item 0x24
+    \item call subroutine at address in \textbf{register}
+    \itm{
+        \item saves stack frame to stack
+        \item assume that registers will stay intact on return of subroutine
+        \itm{
+            \item except for acu, which will contain the result of the subroutine
+        }
+    }
+}
+
+\isec{ret}
+
+\ins{RET}{noArgs}{
+    \item 0x04
+    \item return from subroutine
+    \itm{
+        \item all pushes to stack from within subroutine will be lost
+        \item stack frame will be popped from stack and registers will
+                be restored for the calling routine
+        \item acu register will stay intact
+    }
+}
+
+\isec{hlt}
+
+\ins{HLT}{noArgs}{
+    \item 0x06
+    \item tells the cpu to stop cycling, effectively turns off the VM
+}
+
+\isec{brk}
+
+\ins{BRK}{noArgs}{
+    \item 0x03
+    \item used for debugging
+    \itm{
+        \item when the cpu is in debug mode, the CPU will stop at the 
+            \textbf{brk} instruction and wait for user input before
+            continuing
+    }
+}
+
+\isec{mms}
+
+\ins{MEM MODE SET}{singleLit8}{
+    \item 0x47
+    \item sets memory mode to \textbf{literal}
+    \itm{
+        \item for now memory modes are
+        \item 0: \textbf{RELATIVE}
+        \itm{
+            \item memory access are done by taking address and adding
+                    the start address of the memory device to which the last
+                    interrupt either pointed to or returned to
+        }
+        \item 1: \textbf{ABSOLUTE}
+        \itm{
+            \item memory accesses are done with the addresses directly
+        }
+    }
+}
+
+\isec{rav}
+
+\ins{REAL ADDRESS VALUE REG PTR}{regReg}{
+    \item 0xA7
+    \item calculates the real memory address of the address in \textbf{register 1} and
+            saves it to \textbf{register 2}
+    \item depends on Memory Mode
+    \itm{
+        \item will add the start address of the memory device to which the last interrupt either
+            pointer to or returned to, with the address in \textbf{register 1} in \textit{RELATIVE}
+            Memory device
+        \item will directly return the address in \textbf{register 1} given in \textit{ABSOLUTE} Memory Device
+    }
+}
+
+
+\ins{REAL ADDRESS VALUE MEM}{litReg}{
+    \item 0x87
+    \item calculates the real memory address of the \textbf{address} and saves it to
+            \textbf{register}
+    \item depends on Memory Mode
+    \itm{
+        \item will add the start address of the memory device to which the last interrupt either
+            pointer to or returned to, with the \textbf{address} in \textit{RELATIVE} Memory device
+        \item will directly return the address given in \textit{ABSOLUTE} Memory Device
+    }
+}
+
+\end{multicols}
+
+\begin{multicols}{2}
+
+% \noindent \begin{minipage}{\linewidth}
+
+\isec{sig}
+
+\ins{SEND SIGNAL}{singleReg}{
+    \item 0x27
+    \item send a signal to device with DeviceID of value in \textbf{register}
+    \itm{
+        \item no equivalent literal instruction since there is not specification that
+            asserts that DeviceIDs are predicatble and hence compile time constants
+        \item Any use of a DeviceID should be from a register, hopefully calculated using
+            either the DeviceID arrays, or from the data within the device codespaces
+            \itm{
+                \item \textit{Since the first byte of any device's codespace will be set to
+                    the DeviceID associated with it}
+            }
+        \item DO NOT attempt to use a \textit{literal} to signal a device, it is an
+                unspecified action and depending on implementation may cause issues
+    }
+}
+
+\section{Oh No Instructions}
+
+There is a reference to the following instructions in the most recent
+and thereby most up-to-date assembler. Unfortunately, these instructions
+have no explanation or implementations, and therefore I have no clue what
+they are for or what they do. That being said it seems like they are
+related to the LogicSim implementation of the FanCon system.
+
+\isec{sjge}
+
+\ins{JGE REGI}{regMem}{
+    \item 0x6f
+    \item ??
+}
+
+\isec{slog}
+
+\ins{LOG REGI}{singleReg}{
+    \item 0x26
+    \item ??
+}
+
+\end{multicols}
+
+%endregion
+
+%region Instruction Table
+
+\section{Instructions Table}
+
+\definecolor{limergreen}{HTML}{2AE640}
+\definecolor{darkseagreen}{HTML}{A9D08E}
+\definecolor{navajowhite}{HTML}{F8CBAD}
+\definecolor{lightsteelblue}{HTML}{B4C6E7}
+\definecolor{magicpink}{HTML}{FFC7CE}
+\definecolor{khaki}{HTML}{FFE699}
+\definecolor{brightkhaki}{HTML}{FFD966}
+\definecolor{uglykhaki}{HTML}{BF8F00}
+
+\newcolumntype{m}{>{\columncolor{gray}\color{white}}l}
+\newcolumntype{h}{>{\columncolor{limergreen}}r}
+\renewcommand{\arraystretch}{1.6}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    filecolor=black,      
+    urlcolor=black,
+}
+
+\newcommand{\gtc}[1]{%
+    \ifthenelse{\equal{#1}{log}}{\cellcolor{navajowhite}}{%
+        \ifthenelse{\equal{#1}{mov}}{\cellcolor{brightkhaki}}{%
+            \ifthenelse{\equal{#1}{mov8}}{\cellcolor{khaki}}{%
+                \ifthenelse{\equal{#1}{jmp}}{\cellcolor{darkseagreen}}{%
+                    \ifthenelse{\equal{#1}{alu}}{\cellcolor{magicpink}}{%
+                        \ifthenelse{\equal{#1}{sys}}{\cellcolor{lightsteelblue}}{%
+                            \ifthenelse{\equal{#1}{movb}}{\cellcolor{uglykhaki}}{}%
+                        }%
+                    }%
+                }%
+            }%
+        }%
+    }%
+}
+\newcommand{\head}[2]{\multicolumn{1}{|c}{} & #1 & #2 & \multicolumn{1}{c}{} & \cellcolor{white}}
+\newcommand{\iline}[5]{#2 & \gtc{#1} \hyperref[sec:#3]{#3} & \gtc{#1} & \gtc{#1}#4 & #5}
+\newcommand{\blankline}{\multicolumn{1}{|c}{\cellcolor{white}} & & & \multicolumn{1}{c}{} & \multicolumn{1}{c|}{\cellcolor{white}}}
+
+%region Table Group 1
+
+\begin{multicols}{2}
+
+\begin{tabular}{| m | l l l | h |}
+    \hline
+    \head{L}{010} \\
+    \hline
+    \iline{log}{log}{LOG MEM}{00\_001}{41} \\
+    \iline{sys}{int}{INT LIT}{00\_101}{45} \\
+    \iline{sys}{psh}{PSH LIT}{00\_010}{42} \\
+    \iline{sys}{cal}{CAL LIT}{00\_100}{44} \\
+    \iline{sys}{mms}{MEM MODE SET}{00\_111}{47} \\
+    \iline{jmp}{jmp}{JMP LIT}{01\_000}{48} \\
+    \hline
+\end{tabular}
+\vspace{\baselineskip}
+
+\begin{tabular}{| m | l l l | h |}
+    \hline
+    \head{LL}{110} \\
+    \hline
+    \iline{mov8}{mov8}{MOV8 LIT MEM}{11\_001}{D9} \\
+    \iline{mov}{mov}{MOV LIT MEM}{11\_000}{D8} \\
+    \iline{jmp}{jne}{JNE LIT}{01\_101}{CD} \\
+    \iline{jmp}{jeq}{JEQ LIT}{01\_010}{CA} \\
+    \iline{jmp}{jlt}{JLT LIT}{01\_100}{CC} \\
+    \iline{jmp}{jgt}{JGT LIT}{01\_001}{C9} \\
+    \iline{jmp}{jle}{JLE LIT}{01\_110}{CE} \\
+    \iline{jmp}{jge}{JGE LIT}{01\_011}{CB} \\
+    \hline
+\end{tabular}
+
+\begin{tabular}{| m | l l l | h |}
+    \hline
+    \head{LRR}{111} \\
+    \hline
+    \iline{mov}{mov}{MOV LIT OFF REG}{11\_000}{F8} \\
+    \hline
+\end{tabular}
+\vspace{\baselineskip}
+
+\begin{tabular}{| m | l l l | h |}
+    \hline
+    \head{R}{001} \\
+    \hline
+    \iline{log}{log}{LOG REG}{00\_000}{20} \\
+    \iline{log}{log}{LOG REG PTR}{00\_001}{21} \\
+    \iline{alu}{inc}{INC REG}{10\_000}{30} \\
+    \iline{alu}{dec}{DEC REG}{10\_001}{31} \\
+    \iline{alu}{not}{NOT}{10\_111}{37} \\
+    \iline{jmp}{jmp}{JMP REG}{01\_000}{28} \\
+    \iline{sys}{psh}{PSH REG}{00\_010}{22} \\
+    \iline{sys}{cal}{CAL REG}{00\_100}{24} \\
+    \iline{sys}{sig}{SEND SIGNAL}{00\_111}{27} \\
+    \iline{sys}{pop}{POP}{00\_011}{23} \\
+    \iline{sys}{int}{INT REG}{00\_101}{25} \\
+    \hline
+    \blankline \\
+    \hline
+    \iline{sys}{}{LOG REGI}{00\_110}{26} \\
+    \hline
+\end{tabular}
+
+\end{multicols}
+
+%endregion
+
+%region Table Group 2
+
+\noindent \resizebox{\textwidth}{!}{
+    \begin{minipage}{1.1\textwidth}
+        % \colorbox{cyan}{
+            \begin{vwcol}[widths={0.4,0.6},rule=0pt]
+                \begin{minipage}{0.4\textwidth}
+                    \begin{tabular}{| m | l l l | h |}
+                        \hline
+                        \head{NIL}{000} \\
+                        \hline
+                        \iline{sys}{rti}{RET INT}{00\_101}{05} \\
+                        \iline{sys}{ret}{RET}{00\_100}{04} \\
+                        \iline{sys}{hlt}{HLT}{00\_110}{06} \\
+                        \iline{sys}{brk}{BRK}{00\_011}{03} \\
+                        \iline{sys}{nop}{NOP}{00\_000}{00} \\
+                        \hline
+                    \end{tabular}
+                    \vspace{2\baselineskip}
+
+                    \begin{tabular}{| m | l l l | h |}
+                        \hline
+                        \head{RL}{011} \\
+                        \hline
+                        \iline{mov8}{movl}{MOVL REG MEM}{11\_001}{79} \\
+                        \iline{mov8}{movh}{MOVH REG MEM}{11\_101}{7D} \\
+                        \iline{mov}{mov}{MOV REG MEM}{11\_000}{78} \\
+                        \iline{movb}{movb}{MOV BLOCK}{11\_110}{7E} \\
+                        \iline{alu}{sub}{SUB REG LIT}{10\_001}{71} \\
+                        \iline{alu}{lsf}{LSF REG LIT}{10\_100}{74} \\
+                        \iline{alu}{rsf}{RSF REG LIT}{10\_101}{75} \\
+                        \iline{alu}{and}{AND REG LIT}{10\_111}{77} \\
+                        \iline{alu}{or}{OR REG LIT}{10\_010}{72} \\
+                        \iline{alu}{xor}{XOR REG LIT}{10\_011}{73} \\
+                        \iline{jmp}{jne}{JNE REG}{01\_101}{6D} \\
+                        \iline{jmp}{jeq}{JEQ REG}{01\_010}{6A} \\
+                        \iline{jmp}{jlt}{JLT REG}{01\_100}{6C} \\
+                        \iline{jmp}{jgt}{JGT REG}{01\_001}{69} \\
+                        \iline{jmp}{jle}{JLE REG}{01\_110}{6E} \\
+                        \iline{jmp}{jge}{JGE REG}{01\_011}{6B} \\
+                        \hline
+                        \blankline \\
+                        \hline
+                        \iline{jmp}{}{JGE REGI}{01\_111}{6f} \\
+                        \hline
+                    \end{tabular}
+                \end{minipage}
+
+                \begin{minipage}{0.6\textwidth}
+                    \begin{tabular}{| m | l l l | h |}
+                        \hline
+                        \head{RR}{101} \\
+                        \hline
+                        \iline{mov8}{mov8}{MOV8 REG PTR REG}{11\_111}{BF} \\
+                        \iline{mov8}{mov8}{MOV8 REG REG PTR}{11\_011}{BB} \\
+                        \iline{mov}{mov}{MOV REG REG}{11\_000}{B8} \\
+                        \iline{mov}{mov}{MOV REG REG PTR}{11\_019}{BA} \\
+                        \iline{mov}{mov}{MOV REG PTR REG}{11\_110}{BE} \\
+                        \iline{alu}{add}{ADD REG REG}{10\_000}{B0} \\
+                        \iline{alu}{sub}{SUB REG REG}{10\_001}{B1} \\
+                        \iline{alu}{mul}{MUL REG REG}{10\_110}{B6} \\
+                        \iline{alu}{lsf}{LSF REG REG}{10\_100}{B4} \\
+                        \iline{alu}{rsf}{RSF REG REG}{10\_101}{B5} \\
+                        \iline{alu}{and}{AND REG REG}{10\_111}{B7} \\
+                        \iline{alu}{or}{OR REG REG}{10\_010}{B2} \\
+                        \iline{alu}{xor}{XOR REG REG}{10\_011}{B3} \\
+                        \iline{sys}{rav}{REAL ADDRESS VALUE REG PTR}{00\_111}{A7} \\
+                        \hline
+                    \end{tabular}
+                    \vspace{\baselineskip}
+
+                    \begin{tabular}{| m | l l l | h |}
+                        \hline
+                        \head{LR}{100} \\
+                        \hline
+                        \iline{mov8}{mov8}{MOV8 MEM REG}{11\_011}{9B} \\
+                        \iline{mov}{mov}{MOV LIT REG}{11\_000}{98} \\
+                        \iline{mov}{mov}{MOV MEM REG}{11\_010}{9A} \\
+                        \iline{alu}{add}{ADD LIT REG}{10\_000}{90} \\
+                        \iline{alu}{sub}{SUB LIT REG}{10\_001}{91} \\
+                        \iline{alu}{mul}{MUL LIT REG}{10\_110}{96} \\
+                        \iline{sys}{rav}{REAL ADDRESS VALUE MEM}{00\_111}{87} \\
+                        \hline
+                    \end{tabular}
+                \end{minipage}
+            \end{vwcol}
+        % }
+    \end{minipage}
+}
+
+\vspace{-190pt}
+
+%endregion
+
+%endregion
+
+%region I/O reference
+
+\section{I/O reference}
+
+\noindent Unfortunately, the FantasyConsole system allows for pseudo I/O devices to be connected to the VM runtime. The system sets up three subtopics to create.
+\begin{itemize}
+    \item Device
+    \item Device Driver Interaction
+    \item User-code Interaction
+\end{itemize}
+
+\noindent These devices should be implemented mostly through kotlin, this kotlin setup is largely ignored in within this reference because it can be rather expansive and a lot of anything is possible. To turn a .jar into an acceptable device it needs to have a class that implements the \textbf{ca.kam.vmhardwarelibraries.TechDevice} interface. This interface requires defining the following properties
+
+\begin{itemize}
+    \item isForked
+        \begin{itemize}
+            \item This is a boolean value that should signify if the device requires its code to run parallel or just runs on the \textbf{signal} function. This is largely implementation dependent, the current Kotlin-FC implementation does not care about this flag, but other implementations may.
+        \end{itemize}
+    \item deviceInfo
+        \begin{itemize}
+            \item This is a field of type \textbf{ca.kam.vmhardwarelibraries.DeviceAsks} which is outlined later. This are the resources that the device requests from the device.
+        \end{itemize}
+    \item lockBuffer
+        \begin{itemize}
+            \item This is a function hook, that gives the device a reference to the memory device that represents the memory buffer that the device has requested. This function is only ever run once and then never again. The device should save this reference internally.
+        \end{itemize}
+    \item getCode
+        \begin{itemize}
+            \item A function that should return a \textbf{UByteArray} that contains the driver code that the device provides.
+        \end{itemize}
+    \item signal
+        \begin{itemize}
+            \item A function hook, this is called when the \textbf{sig} instruction is executed with this device as its argument.
+        \end{itemize}
+\end{itemize}
+
+\noindent The class \textbf{ca.kam.vmhardwarelibraries.DeviceAsks} has the following properties
+
+\begin{itemize}
+    \item name
+        \begin{itemize}
+            \item A single UByte that defines the name of the device. Ideally would want this to be unique. In the future we would need some better way to identify devices.
+        \end{itemize}
+    \item codeSpaceRequest
+        \begin{itemize}
+            \item UShort that defines the size of the code space that the device driver requires. The Kotlin-FC implementation has a hard cap of 600 bytes of maximum code space.
+        \end{itemize}
+    \item commBufferRequest
+        \begin{itemize}
+            \item UShort that defines the requested buffer size for the device. The Kotlin-FC implementation has a hard cap of 50 bytes as the maximum buffer size.
+        \end{itemize}
+    \item interrupts
+        \begin{itemize}
+            \item Array of UShorts that contains the local space addresses of the interrupt handlers that the device defines. The Kotlin-FC implementation currently supports a maximum of 2 device defined interrupts. (Technically)
+        \end{itemize}
+\end{itemize}
+
+\noindent The code space that is provided to the device is populated as follows
+
+\begin{itemize}
+    \item First byte is set to the device ID
+    \item The next 2 bytes are set to the address of the communication buffer requested by this device
+    \item the rest of the code space is copied directly from the \textbf{getCode} function of the device
+\end{itemize}
+
+\noindent Note, that this means that the device driver code should start with a \textit{data8} for the device ID, and follow up with a \textit{data16} for the communication buffer address.
+
+\noindent This brings us to the user side and the API provided by the FC for accessing, identifying, and finding devices. The FC system setup creates 3 arrays to help with this.
+
+\begin{itemize}
+    \item Communication Buffer address list
+    \item Device name list
+    \item Device first interrupt list
+\end{itemize}
+
+\noindent Interrupts 3 and 4 return the device name and the device first interrupt lists into the \textbf{acu}. Interrupt 2 requires the device id to be passed as an argument in \textbf{r1} and returns the communication buffer address of that device into \textbf{acu}.
+
+\noindent This brings us to the user-api for accessing an I/O device. The user code should first grab the device name list, and the device first interrupt list. The device ID is effectively the index of the device name within the device name list. So the user-api should walk through the device name list until it finds the device it's looking for. The user code now knows the device ID and also knows the first interrupt corresponding to the device it wants. The user code can now use the interrupts to use the device. The user code can also use interrupt 2 and the device ID to find the communication buffer and put data their directly. Not recommended and will only work if the device and device driver support/expect this behaviour. \textit{Note: the user code should probably have a pseudo "device driver" that effectively caches the previously mentioned information so that cpu cycles are not wasted finding and refinding device drivers.}
+
+\subsection{TODO}
+
+Actually fix the device naming issue.
+
+%endregion
+
+\end{document}
