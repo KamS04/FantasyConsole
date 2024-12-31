@@ -15,24 +15,28 @@ object DefaultExecutor: Executor {
                 InstructionsMapper.LOG_REG -> {
                     val registerIndex = fetchRegisterIndex()
                     val value = registers.bit16[registerIndex]
-                    println("LOG: $registerIndex, $value, ${value.hexString()}")
+                    println("LOG_R: ${regIdxToName(registerIndex)}, $value, ${value.hexString()}")
                 }
 
                 InstructionsMapper.LOG_REG_PTR -> {
                     val registerIndex = fetchRegisterIndex()
                     val address = registers.bit16[registerIndex]
                     val value = memory.bit16[address]
-                    println("LOG: $address: $value | HEX - ${address.hexString()}: ${value.hexString()}")
+                    println("LOG_L: $address: $value | HEX - ${address.hexString()}: ${value.hexString()}")
                 }
 
                 InstructionsMapper.LOG_MEM -> {
                     val address = fetch16()
                     val value = memory.bit16[address]
-                    println("LOG: $address: $value | HEX - ${address.hexString()}: ${value.hexString()}")
+                    println("LOG_M: $address: $value | HEX - ${address.hexString()}: ${value.hexString()}")
                 }
 
                 InstructionsMapper.BRK -> {
                     readln()
+                    return false
+                }
+
+                InstructionsMapper.NOP -> {
                     return false
                 }
                 //endregion
@@ -187,8 +191,19 @@ object DefaultExecutor: Executor {
                     val registerTo = fetchRegisterIndex()
                     val offset = registers.bit16[registerFrom]
 
-                    val value = memory.bit16[(baseAddress + offset).s]
+                    val address = (baseAddress + offset).s
+                    val value = memory.bit16[address]
                     registers.bit16[registerTo] = value
+                }
+
+                InstructionsMapper.MOV_BLOCK -> {
+                    val fromReg = fetchRegisterIndex()
+                    val toReg = fetchRegisterIndex()
+                    val lengthReg = fetchRegisterIndex()
+                    val fromAddress = registers.bit16[fromReg]
+                    val toAddress = registers.bit16[toReg]
+                    val length = registers.bit16[lengthReg]
+                    moveMemoryBlock(fromAddress, toAddress, length)
                 }
                 //endregion
 
@@ -209,17 +224,17 @@ object DefaultExecutor: Executor {
                 }
 
                 InstructionsMapper.SUB_LIT_REG -> {
-                    val reg = fetchRegisterIndex()
                     val literal = fetch16()
+                    val reg = fetchRegisterIndex()
                     val regVal = registers.bit16[reg]
-                    setRegister(Registers.ACU, regVal - literal)
+                    setRegister(Registers.ACU, literal - regVal)
                 }
 
                 InstructionsMapper.SUB_REG_LIT -> {
                     val reg = fetchRegisterIndex()
                     val literal = fetch16()
                     val regVal = registers.bit16[reg]
-                    setRegister(Registers.ACU, literal - regVal)
+                    setRegister(Registers.ACU, regVal - literal)
                 }
 
                 InstructionsMapper.SUB_REG_REG -> {
@@ -227,7 +242,7 @@ object DefaultExecutor: Executor {
                     val r2 = fetchRegisterIndex()
                     val regVal1 = registers.bit16[r1]
                     val regVal2 = registers.bit16[r2]
-                    setRegister(Registers.ACU, regVal2 + regVal1)
+                    setRegister(Registers.ACU, regVal1 - regVal2)
                 }
 
                 InstructionsMapper.MUL_LIT_REG -> {
@@ -264,14 +279,14 @@ object DefaultExecutor: Executor {
                     val r2 = fetchRegisterIndex()
                     val regVal = registers.bit16[r1]
                     val shiftBy = registers.bit16[r2]
-                    registers.bit16[r1] = regVal shl shiftBy
+                    setRegister(Registers.ACU, regVal shr shiftBy)
                 }
 
                 InstructionsMapper.LSF_REG_LIT -> {
                     val reg = fetchRegisterIndex()
-                    val literal = fetch()
+                    val shiftBy = fetch()
                     val regVal = registers.bit16[reg]
-                    registers.bit16[reg] = regVal shl literal
+                    setRegister(Registers.ACU, regVal shr shiftBy)
                 }
 
                 InstructionsMapper.RSF_REG_REG -> {
@@ -279,14 +294,14 @@ object DefaultExecutor: Executor {
                     val r2 = fetchRegisterIndex()
                     val regVal = registers.bit16[r1]
                     val shiftBy = registers.bit16[r2]
-                    registers.bit16[r1] = regVal shr shiftBy
+                    setRegister(Registers.ACU, regVal shr shiftBy)
                 }
 
                 InstructionsMapper.RSF_REG_LIT -> {
                     val reg = fetchRegisterIndex()
-                    val literal = fetch()
+                    val shiftBy = fetch()
                     val regVal = registers.bit16[reg]
-                    registers.bit16[reg] = regVal shr literal
+                    setRegister(Registers.ACU, regVal shr shiftBy)
                 }
 
                 InstructionsMapper.AND_REG_LIT -> {
@@ -342,12 +357,32 @@ object DefaultExecutor: Executor {
                 //endregion
 
                 //region Conditionals
+                InstructionsMapper.JMP_REG -> {
+                    val reg = fetchRegisterIndex()
+                    val address = registers.bit16[reg]
+                    jumpToAddress(address)
+                }
+
+                InstructionsMapper.JMP_LIT -> {
+                    val address = fetch16()
+                    jumpToAddress(address)
+                }
+
                 InstructionsMapper.JMP_NOT_EQ -> {
                     val value = fetch16()
                     val address = fetch16()
                     if (value != getRegister(Registers.ACU))
                         jumpToAddress(address)
 //                        setRegister(Registers.IP, address)
+                    return false
+                }
+
+                InstructionsMapper.JNE_LIT -> {
+                    val lit = fetch16()
+                    val address = fetch16()
+                    if (getRegister(Registers.ACU) == lit) {
+                        jumpToAddress(address)
+                    }
                     return false
                 }
 
@@ -473,7 +508,8 @@ object DefaultExecutor: Executor {
                 }
 
                 InstructionsMapper.MEM_MODE_SET -> {
-                    this.memMode = fetch()
+                    val newMemMode = fetch()
+                    quickMemMode(newMemMode)
                 }
 
                 InstructionsMapper.SEND_SIG -> {
@@ -490,6 +526,15 @@ object DefaultExecutor: Executor {
                     setRegister(
                         toIdx,
                         getRealAddress(address)
+                    )
+                }
+
+                InstructionsMapper.REAL_MEM -> {
+                    val ptr = fetch16()
+                    val toIdx = fetchRegisterIndex()
+                    setRegister(
+                        toIdx,
+                        getRealAddress(ptr)
                     )
                 }
 

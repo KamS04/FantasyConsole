@@ -18,6 +18,7 @@ class CPUBuilder {
     var instructionsList: List<Instruction>? = null
     var executor: Executor = DefaultExecutor
     val techArray = mutableListOf<TechDevice>()
+    var pauseAfterStep = false
 
     fun memory(memory: MemoryDevice) = apply { this.memory = memory }
     fun registersNames(registers: List<String>) = apply { this.registersNames = registers }
@@ -27,6 +28,7 @@ class CPUBuilder {
     fun instructions(instrucs: List<Instruction>) = apply { this.instructionsList = instrucs }
     fun executor(executor: Executor) = apply { this.executor = executor }
     fun attach(device: TechDevice) = apply { this.techArray.add(device) }
+    fun pauseAfterStep(step: Boolean) = apply { this.pauseAfterStep = step }
 
     fun build(): CPU {
         if (memory == null)
@@ -40,7 +42,8 @@ class CPUBuilder {
             debugMode,
             instructionsList,
             executor,
-            techArray.toTypedArray()
+            techArray.toTypedArray(),
+            pauseAfterStep
         )
     }
 }

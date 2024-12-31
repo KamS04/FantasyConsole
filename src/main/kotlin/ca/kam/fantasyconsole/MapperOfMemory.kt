@@ -19,7 +19,7 @@ class MapperOfMemory(override val name: String): MemoryMapper {
 
     override fun slice(fAddress: UShort, tAddress: UShort): List<UByte> {
         val dev = findReadableDevice(fAddress)
-        if (tAddress < dev.end)
+        if (tAddress <= dev.end)
             return dev.device.slice(
                 if (dev.remap) (fAddress - dev.start).s else fAddress,
                 if (dev.remap) (tAddress - dev.start).s else tAddress

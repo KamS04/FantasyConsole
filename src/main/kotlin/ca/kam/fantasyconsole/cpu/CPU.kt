@@ -20,8 +20,14 @@ class CPU(
     val debugMode: Boolean = false,
     val instructionsList: List<Instruction>? = null,
     val executor: Executor = DefaultExecutor,
-    val attachedDevices: Array<TechDevice> = emptyArray()
+    val attachedDevices: Array<TechDevice> = emptyArray(),
+    pauseAfterStep: Boolean
 ): CPUInterface {
+    private var _pauseAfterStep = pauseAfterStep
+
+    val pauseAfterStep
+        get() = _pauseAfterStep
+
     override val memory: MemoryDevice = object: MemoryDevice {
         override val name: String = "CPU Memory"
         override fun load(data: UByteArray, startAddress: UShort) {
@@ -67,7 +73,12 @@ class CPU(
         }
     }
 
-    override var memMode: UByte = 0u
+    // All of these are RAV addresses
+    override fun moveMemoryBlock(from: UShort, to: UShort, length: UShort) {
+        directMemory.load(directMemory.slice(from, (from + length).s).toUByteArray(), to)
+    }
+
+    override var memMode: UByte = 1u
     override var cMemSpace: UShort = 0u
 
     private val mInstructionList: List<Instruction> by lazy {
@@ -80,7 +91,13 @@ class CPU(
 
     override val registers = RAM(registersNames.size * 2, "CPU-Registers")
 
-    var isInterruptHandler = false
+    var isInterruptHandler: Boolean = false
+        get() = field
+        set(value) {
+            field = value
+        }
+
+//    var isInterruptHandler = false
     var stackFrameSize = 0u
 
     val debugStr: String
@@ -114,12 +131,17 @@ class CPU(
             println("Starting at Instruction Address ${startAddress.hexString()}")
         }
 
-        setupMemMode(MemModes.RELATIVE)
+        // Used to setup MemMode our selves, now it will be done via an actual interrupt
+        // setupMemMode(MemModes.RELATIVE)
 
         setRegister(Registers.IM, 0xffffu)
         stackPosition = directMemory.bit16[(interruptVectorAddress + 2u).s]
         setRegister(Registers.SP, stackPosition)
         setRegister(Registers.FP, stackPosition)
+
+        isInterruptHandler = true
+        handleInterrupt(0u)
+        isInterruptHandler = false // but set not in interrupt
     }
 
     // region Register Helpers
@@ -129,6 +151,10 @@ class CPU(
         }
 
         return (registersMap[register]!! * 2).us
+    }
+
+    override fun regIdxToName(rIdx: UShort): String {
+        return registersNames[(rIdx / 2u).toInt()]
     }
 
     override fun getRegister(register: String) = getRegister(registerIndex(register))
@@ -206,11 +232,20 @@ class CPU(
 
     // region Subroutines
 
+    // Old system the SP register contained the position to which the next
+    // stack element should be written to
+    // THIS IS DUMB, the SP register will contain the register where the previous
+    // stack element was written to
+    // TODO hopefully this doesn't break anything
     override fun push(value: UShort) {
         val spAddress = getRegister(Registers.SP)
-        directMemory.bit16[spAddress] = value
+        val nextAddress = (spAddress - 2u).s
+        setRegister(Registers.SP, nextAddress)
         stackFrameSize += 2u
-        setRegister(Registers.SP, (spAddress - 2u).s)
+        // the stack used to reference the RAV address of the STACK_TOP
+        // We're changing it to be a relative address
+        // directMemory.bit16[nextAddress] = value
+        memory.bit16[nextAddress] = value
     }
 
     override fun pop(): UShort {
@@ -218,11 +253,34 @@ class CPU(
         if (spAddress == stackPosition) {
             throw Exception("Popping Stack when empty")
         }
-        val nextSpAddress = (spAddress + 2u).s
-        setRegister(Registers.SP, nextSpAddress)
+        val prevSpAddress = (spAddress + 2u).s
+        setRegister(Registers.SP, prevSpAddress)
         stackFrameSize -= 2u
-        return directMemory.bit16[nextSpAddress]
+        // the stack used to reference the RAV address of the STACK_TOP
+        // We're changing it to be a relative address
+        // directMemory.bit16[nextAddress] = value
+        // return directMemory.bit16[spAddress]
+        return memory.bit16[spAddress]
     }
+
+
+//    override fun push(value: UShort) {
+//        val spAddress = getRegister(Registers.SP)
+//        directMemory.bit16[spAddress] = value
+//        stackFrameSize += 2u
+//        setRegister(Registers.SP, (spAddress - 2u).s)
+//    }
+
+//    override fun pop(): UShort {
+//        val spAddress = getRegister(Registers.SP)
+//        if (spAddress == stackPosition) {
+//            throw Exception("Popping Stack when empty")
+//        }
+//        val nextSpAddress = (spAddress + 2u).s
+//        setRegister(Registers.SP, nextSpAddress)
+//        stackFrameSize -= 2u
+//        return directMemory.bit16[nextSpAddress]
+//    }
 
     override fun pushState() {
         registersNames.forEach {
@@ -286,11 +344,41 @@ class CPU(
         setupMemMode(MemModes.RELATIVE)
     }
 
-    fun setupMemMode(nMode: UByte) {
-        memMode = nMode
-        cMemSpace = if (directMemory is MemoryMapper) {
+    override fun quickMemMode(nMode: UByte) {
+        // The stack used to be an ABSOLUTE pointer
+        // It will now be a RELATIVE
+        // This means whenever a MemMode is setup it must be updated
+        if (nMode != memMode) {
+            val oldStackPointer = getRegister(Registers.SP)
+            setRegister(
+                Registers.SP,
+                if (nMode == 0u.b) { // ABSOLUTE -> RELATIVE
+                    oldStackPointer - cMemSpace
+                } else { // RELATIVE -> ABSOLUTE
+                    oldStackPointer + cMemSpace
+                }
+            )
+            memMode = nMode
+        }
+    }
+
+    override fun setupMemMode(nMode: UByte) {
+        val newCMemSpace = if (directMemory is MemoryMapper) {
             directMemory.findDevice(getRegister(Registers.IP))?.start ?: 0u
         } else 0u
+        var oldStackPointer = getRegister(Registers.SP)
+        if (memMode == 0.ub) {
+            oldStackPointer = (oldStackPointer + cMemSpace).s
+        }
+        setRegister(
+            Registers.SP,
+            if (nMode == 0.ub)
+                (oldStackPointer - newCMemSpace).s
+            else
+                oldStackPointer
+        )
+        cMemSpace = newCMemSpace
+        memMode = nMode
     }
 
     override fun jumpToAddress(address: UShort) {
@@ -346,9 +434,13 @@ class CPU(
         }
         val instruction = fetch()
         if (debugMode) {
-            val ins = opcodeGetter(instruction)
-            val dS = getMemoryAt(getRegister(Registers.IP), (InstructionBits.instructionSizes[ins.type]!! - 1u).toInt())
-            println(": ${ins.tag} \$$dS\n")
+            try {
+                val ins = opcodeGetter(instruction)
+                val dS = getMemoryAt(getRegister(Registers.IP), (InstructionBits.instructionSizes[ins.type]!! - 1u).toInt())
+                println(": ${ins.tag} \$$dS\n")
+            } catch (e: Exception) {
+//                println("Instruction Unknown with opcode: ${instruction.hexString()}")
+            }
         }
 
         return execute(instruction)
@@ -356,13 +448,27 @@ class CPU(
 
     fun run() {
 //        var halt = false
-        while (!step()) {
-            continue
+        if (pauseAfterStep) {
+            while (!step()) {
+                readln()
+            }
+        } else {
+            while (!step()) {
+                continue
+            }
         }
 //        while (!halt) {
 //            halt = step()
 //        }
     }
+
+    private fun startPausing() {
+        _pauseAfterStep = true
+    }
+    private fun stopPausing() {
+        _pauseAfterStep = false
+    }
+
 
     // endregion
 

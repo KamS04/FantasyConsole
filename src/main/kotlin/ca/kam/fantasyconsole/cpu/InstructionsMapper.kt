@@ -33,6 +33,7 @@ object InstructionsMapper {
     val MOV_LIT_MEM by lazy { opcodeGetter("MOV_LIT_MEM") }
     val MOV_REG_PTR_REG by lazy { opcodeGetter("MOV_REG_PTR_REG") }
     val MOV_LIT_OFF_REG by lazy { opcodeGetter("MOV_LIT_OFF_REG") }
+    val MOV_BLOCK by lazy { opcodeGetter("MOV_BLOCK") }
     val ADD_REG_REG by lazy { opcodeGetter("ADD_REG_REG") }
     val ADD_LIT_REG by lazy { opcodeGetter("ADD_LIT_REG") }
     val SUB_LIT_REG by lazy { opcodeGetter("SUB_LIT_REG") }
@@ -53,10 +54,13 @@ object InstructionsMapper {
     val XOR_REG_LIT by lazy { opcodeGetter("XOR_REG_LIT") }
     val XOR_REG_REG by lazy { opcodeGetter("XOR_REG_REG") }
     val NOT by lazy { opcodeGetter("NOT") }
+    val JMP_REG by lazy { opcodeGetter("JMP_REG") }
+    val JMP_LIT by lazy { opcodeGetter("JMP_LIT") }
     val JMP_NOT_EQ by lazy { opcodeGetter("JMP_NOT_EQ") }
     val JNE_REG by lazy { opcodeGetter("JNE_REG") }
     val JEQ_REG by lazy { opcodeGetter("JEQ_REG") }
     val JEQ_LIT by lazy { opcodeGetter("JEQ_LIT") }
+    val JNE_LIT by lazy { opcodeGetter("JNE_LIT") }
     val JLT_REG by lazy { opcodeGetter("JLT_REG") }
     val JLT_LIT by lazy { opcodeGetter("JLT_LIT") }
     val JGT_REG by lazy { opcodeGetter("JGT_REG") }
@@ -73,6 +77,7 @@ object InstructionsMapper {
     val RET by lazy { opcodeGetter("RET") }
     val HLT by lazy { opcodeGetter("HLT") }
     val BRK by lazy { opcodeGetter("BRK") }
+    val NOP by lazy { opcodeGetter("NOP") }
     val MEM_MODE_SET by lazy { opcodeGetter("MEM_MODE_SET") }
     val SEND_SIG by lazy { opcodeGetter("SEND_SIG") }
     val REAL_REG_PTR by lazy { opcodeGetter("REAL_REG_PTR") }

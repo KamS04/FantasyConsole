@@ -4,16 +4,25 @@ import ca.kam.fantasyconsole.*
 import ca.kam.fantasyconsole.machine.*
 import ca.kam.metainstructions.InstructionBits.readInstructionsCSV
 import ca.kam.vmhardwarelibraries.DeviceAsks
+import ca.kam.vmhardwarelibraries.FantasyCartridge
 import ca.kam.vmhardwarelibraries.TechDevice
 import ca.kam.vmhardwarelibraries.memory.RAM
 import ca.kam.vmhardwarelibraries.memory.ROM
 import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.parameters.groups.*
 import com.github.ajalt.clikt.parameters.options.*
 import com.github.ajalt.clikt.parameters.types.file
 import com.github.ajalt.clikt.parameters.types.int
+import com.github.ajalt.clikt.parameters.types.path
 import java.io.File
 import java.lang.Integer.min
 import kotlin.system.exitProcess
+
+sealed class AppType(val file: File)
+
+class BinaryApp(file: File): AppType(file)
+
+class CartridgeApp(file: File): AppType(file)
 
 class VMRuntime: CliktCommand() {
     private val executor by option("-e", "--executor").file(
@@ -36,11 +45,23 @@ class VMRuntime: CliktCommand() {
 
     private val memorySize by option("-m", "--memory").int().default(256 * 256 - 1)
 
-    private val cartridge by option("-c", "--cartridge").file(
-        mustExist = true,
-        canBeDir = false,
-        mustBeReadable = true
+    private val appType by mutuallyExclusiveOptions(
+        option("-c", "--code").file(
+            mustExist = true,
+            canBeDir = false,
+            mustBeReadable = true
+        ).convert { BinaryApp(it) },
+        option("--cartridge").file(
+            mustExist = true,
+            canBeDir = false,
+            mustBeReadable = true
+        ).convert { CartridgeApp(it) }
     ).required()
+
+//    private val appType by option().groupSwitch(
+//        "bin" to BinaryApp(),
+//        "cart" to CartridgeApp()
+//    ).required()
 
     private val registers by option("-r", "--registers-file").file(
         mustExist = true,
@@ -50,17 +71,19 @@ class VMRuntime: CliktCommand() {
 
     private val debugMode by option("-d", "--debug").flag()
 
-    private val dumpUsedMemory by option("--dump-memory").flag()
+    private val dumpUsedMemoryStart by option("--dmps", "--dump-memory-start").path(
+    )
 
-    private val oldLoad by option("--old-loader").flag(default=false)
+    private val dumpUsedMemoryEnd by option ("--dmpe", "--dump-memory-end").path(
+    )
+
+    private val oldLoad by option("--old-loader").flag(default=false).deprecated("This option no longer works. Attempting normal load.")
 
     private val devicesParameter by option("-D", "--devices").split(",")
 
-    override fun run() {
-        if (oldLoad) {
-            noDevicesOldLoader()
-        }
+    private val stepThrough by option("-s", "--step").flag(default=false)
 
+    override fun run() {
         withDevicesLoader()
     }
 
@@ -85,7 +108,7 @@ class VMRuntime: CliktCommand() {
         val systemInterruptCodeSize = 25
         val systemInterruptCodeAddress = interruptSize
 
-        val deviceCodeSpaceSize = asks.sumOf { min(it.codeSpaceRequest.toInt(), 200) }
+        val deviceCodeSpaceSize = asks.sumOf { min(it.codeSpaceRequest.toInt(), 600) }
         val deviceCodeSpaceAddress = systemInterruptCodeAddress + systemInterruptCodeSize
 
         val deviceCommSpaceSize = asks.sumOf { min(it.commBufferRequest.toInt(), 50) }
@@ -96,7 +119,7 @@ class VMRuntime: CliktCommand() {
         val deviceCommArraySize = techDevices.size * 2
         val deviceCommArrayAddress = deviceNameArrayAddress + deviceNameArraySize
 
-        val deviceInterruptArraySize = asks.sumOf { min(it.interrupts.size, 4) }
+        val deviceInterruptArraySize = asks.sumOf { min(it.interrupts.size, 1) }
         val deviceInterruptsArrayAddress = deviceCommArrayAddress + deviceCommArraySize
 
         val totalSystemOverheadMemory = deviceInterruptsArrayAddress + deviceInterruptArraySize
@@ -104,17 +127,32 @@ class VMRuntime: CliktCommand() {
 
         // region system interrupt rom
         val int1and2ByteArray = ubyteArrayOf(
-            *addressToBytes(deviceCommArrayAddress.toUShort()), // data16 commList = { $0000 }
-            *addressToBytes(deviceNameArrayAddress.toUShort()), // data16 devList = { $0000 }
-            *addressToBytes(deviceInterruptsArrayAddress.toUShort()), // data16 devIntList = { $0000 }
-            0x20u, 0x00u, 0x02u, 0x02u,   // mul $2, r1
-            0x3fu, 0x00u, 0x00u, 0x00u,   // add [!commList], acu
-            0xfcu,                        // rti
-            0x13u, 0x00u, 0x02u, 0x00u,   // mov &[!devList], acu
-            0xfcu,                        // rti
-            0x13u, 0x00u, 0x04u, 0x01u,   // move &[!devIntList], acu
-            0xfcu,                        // rti
+            0x00u, 0x00u, // data16 commList = { $0000 }
+            0x00u, 0x00u, // data16 devList = { $0000 }
+            0x00u, 0x00u, // data16 devIntList = { $0000 }
+            // int $2
+            0x96u, 0x00u, 0x02u, 0x02u,   // mul $2, r1
+            0x90u, 0x00u, 0x00u, 0x01u,   // add [!commList], acu
+            0x05u,                        // rti
+            // int $3
+            0x9au, 0x00u, 0x02u, 0x01u,   // mov &[!devList], acu
+            0x05u,                        // rti
+            // in $4
+            0x9au, 0x00u, 0x04u, 0x01u,   // move &[!devIntList], acu
+            0x05u,                        // rti
         )
+        addressToBytes(deviceCommArrayAddress.toUShort()).let {
+            int1and2ByteArray[0] = it[0]
+            int1and2ByteArray[1] = it[1]
+        }
+        addressToBytes(deviceNameArrayAddress.toUShort()).let {
+            int1and2ByteArray[2] = it[0]
+            int1and2ByteArray[3] = it[1]
+        }
+        addressToBytes(deviceInterruptsArrayAddress.toUShort()).let {
+            int1and2ByteArray[4] = it[0]
+            int1and2ByteArray[5] = it[1]
+        }
 
         memoryMapper.map(
             ROM(int1and2ByteArray.size, "System Interrupts")
@@ -127,14 +165,26 @@ class VMRuntime: CliktCommand() {
         );
         //endregion
 
-        //region cartridge
-        val cartridge = loadFantasyCartridge(cartridge)
+        //region app
         val programMemory = RAM(programMemorySize, "Program Memory")
-        cartridge.loadInto(programMemory, programMemorySize)
+        var cartridge: FantasyCartridge? = null
 
-        memoryMapper.map(programMemory, totalSystemOverheadMemory.us, programMemorySize.us, true)
+        val programFile = appType.file
+        val programStartAddress = if (appType is BinaryApp) {
+            val binasm = programFile.readBytes().toUByteArray()
+            assert(binasm.size <= programMemory.sizeInBytes)
+            programMemory.load(binasm, 0u.s)
+            0u.s
+        } else if (appType is CartridgeApp) {
+            cartridge = loadFantasyCartridge(programFile)
+            cartridge.loadInto(programMemory, programMemorySize)
+            cartridge.startAddress
+        } else {
+            throw Exception("WTF AppType is incorrect")
+        }
         //endregion
 
+        memoryMapper.map(programMemory, totalSystemOverheadMemory.us, programMemorySize.us, true)
         var cBuff = 0
         val deviceCodeAddresses = asks.map {
             val x = deviceCodeSpaceAddress + cBuff
@@ -148,16 +198,17 @@ class VMRuntime: CliktCommand() {
             x.us
         }
 
+
         //region interrupt vector
         val overheadInterrupts = 5
         val interruptAddresses = ubyteArrayOf(
-            *addressToBytes((cartridge.startAddress + totalSystemOverheadMemory.us).toUShort()),
-            *addressToBytes((memorySize - 2).us),
-            *addressToBytes((systemInterruptCodeAddress + 0x0006).us),
-            *addressToBytes((systemInterruptCodeAddress + 0x000f).us),
-            *addressToBytes((systemInterruptCodeAddress + 0x0014).us),
+            *addressToBytes((programStartAddress + totalSystemOverheadMemory.us).toUShort()), // start address int, $0
+            *addressToBytes(memorySize.us), // stack pointer start, int $1
+            *addressToBytes((systemInterruptCodeAddress + 0x0006).us), // get comm list ptr, int $2
+            *addressToBytes((systemInterruptCodeAddress + 0x000f).us), // get dev list ptr, int $3
+            *addressToBytes((systemInterruptCodeAddress + 0x0014).us), // get dev int list ptr, int $4
             *asks.flatMapIndexed { idx, ask ->
-                ask.interrupts.map { (it + deviceCodeAddresses[idx]).s }
+                ask.interrupts.take(2).map { (it + deviceCodeAddresses[idx]).s } // Max of 2 interrupts given to each device
             }.flatMap(::addressToBytes).toUByteArray()
         )
         assert(interruptAddresses.size == interruptSize)
@@ -199,7 +250,7 @@ class VMRuntime: CliktCommand() {
         asks.forEachIndexed { index, deviceAsks ->
             if (deviceAsks.interrupts.isNotEmpty()) {
                 deviceIdToFirstInterrupt[index] = intC.toUByte()
-                intC += min( deviceAsks.interrupts.size, 4 )
+                intC += 1 //min( deviceAsks.interrupts.size, 1 )
             } else {
                 deviceIdToFirstInterrupt[index] = 0u
             }
@@ -220,7 +271,7 @@ class VMRuntime: CliktCommand() {
         //region device memory arrays
         techDevices.zip(asks).forEachIndexed { idx, pair ->
             val devCodeRAM = RAM(
-                min(pair.second.codeSpaceRequest.toInt(), 200),
+                min(pair.second.codeSpaceRequest.toInt(), 600),
                 "Dev $idx CodeSpace"
             ).apply {
                 val bytes = pair.first.getCode()
@@ -232,7 +283,7 @@ class VMRuntime: CliktCommand() {
             memoryMapper.map(
                 devCodeRAM,
                 deviceCodeAddresses[idx],
-                min(pair.second.codeSpaceRequest.toInt(), 200).us,
+                min(pair.second.codeSpaceRequest.toInt(), 600).us,
                 true
             )
 
@@ -266,22 +317,26 @@ class VMRuntime: CliktCommand() {
             println("Program Memory ${totalSystemOverheadMemory.hexString()}")
         }
 
-        if (dumpUsedMemory) {
-            println("Dumping System Memory")
-            for (i in 0 until totalSystemOverheadMemory) {
-                if (i % 5 == 0) {
-                    print("\n")
-                    print("${i.hexString()}: ")
+        dumpUsedMemoryStart?.run {
+            println("Dumping Starting System Memory")
+            this.toFile().writer().run {
+                write("Dumping Starting System Memory\n")
+                for (i in 0 until memorySize) {
+                    if (i % 16 == 0) {
+                        write("\n${i.hexString()}: ")
+                    }
+                    write("${memoryMapper.bit8[i.us].byteString()} ")
                 }
-                print("${memoryMapper.bit8[i.us].byteString()} ")
+                write("\nEnd System Memory\n")
+                close()
             }
-            print("\nEnd System Memory\n")
         }
 
         val builder = CPUBuilder()
         builder.memory(memoryMapper)
         builder.debug(debugMode)
         builder.interrupt(0x00u)
+        builder.pauseAfterStep(stepThrough)
         techDevices.forEach(builder::attach)
 
         registers?.let {
@@ -312,72 +367,33 @@ class VMRuntime: CliktCommand() {
         }
 
         val cpu = builder.build()
-        cartridge.initializeGraphics(cpu)
-        if (cartridge.isForkedGraphics) {
-            cpu.run()
-            cartridge.exitGraphics()
-            exitProcess(0)
-        }
-        else {
-            cartridge.startCPU(cpu)
-            cpu.run()
-        }
-    }
 
-    fun noDevicesOldLoader() {
-        val builder = CPUBuilder()
-        val memoryMapper = MapperOfMemory("FantasyConsole")
-        memoryMapper.map(
-            RAM(memorySize, "BasicRAM"),
-            0u,
-            memorySize.us,
-            false
-        )
-
-        val cartridge = loadCartridge(cartridge)
-        cartridge.loadInto(memoryMapper, memorySize)
-        builder.memory(memoryMapper)
-        builder.debug(debugMode)
-        builder.interrupt(cartridge.interruptVectorAddress)
-
-        registers?.let {
-            val rF = loadRegistersFile(it)
-            builder.registersNames(rF.registerNames)
-            builder.requiredRegisters(rF.requiredRegisters)
-        }
-
-        instructionsFile?.let {
-            builder.instructions(
-                readInstructionsCSV(it.toURI().toString())
-            )
-        }
-
-        executor?.let {
-            builder.executor(
-                loadExecutor(it)
-            )
-        }
-
-        extendedExecutor?.let {
-            if (executor != null) {
-                throw Exception("Cannot extend custom executor")
+        if (appType is CartridgeApp) {
+            if (cartridge!!.isForkedGraphics) {
+                cpu.run()
+                cartridge.exitGraphics()
+                exitProcess(0)
+            } else {
+                cartridge.startCPU(cpu)
+                cpu.run()
             }
-
-            builder.executor(
-                loadExtendedExecutor(it)
-            )
+        } else {
+            cpu.run()
         }
 
-        val cpu = builder.build()
-
-        cartridge.initializeGraphics(cpu)
-        if (cartridge.isForkedGraphics) {
-            cpu.run()
-            cartridge.exitGraphics()
-            exitProcess(0)
+        dumpUsedMemoryEnd?.run {
+            println("Dumping Ending System Memory")
+            this.toFile().writer().run {
+                write("Dumping Ending System Memory\n")
+                for (i in 0 until memorySize) {
+                    if (i % 16 == 0) {
+                        write("\n${i.hexString()}: ")
+                    }
+                    write("${memoryMapper.bit8[i.us].byteString()} ")
+                }
+                write("\nEnd System Memory\n")
+                close()
+            }
         }
-        else
-            cartridge.startCPU(cpu)
-            cpu.run()
     }
 }
